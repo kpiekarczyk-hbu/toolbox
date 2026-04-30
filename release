@@ -12,6 +12,9 @@
 
 set -euo pipefail
 
+__lib="$(dirname -- "${BASH_SOURCE[0]}")/.lib/common.sh"
+. "$__lib" || { echo "fatal: cannot source $__lib" >&2; exit 1; }
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -35,48 +38,7 @@ installed and authenticated.
 EOF
 }
 
-if [[ -t 1 ]]; then
-  c_red=$'\033[0;31m'
-  c_yellow=$'\033[0;33m'
-  c_green=$'\033[0;32m'
-  c_dim=$'\033[2m'
-  c_reset=$'\033[0m'
-else
-  c_red='' c_yellow='' c_green='' c_dim='' c_reset=''
-fi
-
-err() {
-  printf '%srelease: %s%s\n' "$c_red" "$*" "$c_reset" >&2
-}
-
-step() {
-  printf '\n%s==> %s%s%s\n' "$c_dim" "$c_yellow" "$*" "$c_reset"
-}
-
-run() {
-  printf '%s   $ %s%s\n' "$c_dim" "$*" "$c_reset"
-  "$@"
-}
-
 release_re='^[0-9]{2}(0[1-9]|1[0-2])-[abc](-[1-9]0)?$'
-
-require_git_and_gh() {
-  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    err "not inside a git repository"
-    exit 1
-  fi
-  if ! command -v gh >/dev/null 2>&1; then
-    err "gh CLI not found in PATH (https://cli.github.com)"
-    exit 1
-  fi
-}
-
-require_clean_tree() {
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    err "working tree is not clean — commit or stash changes first"
-    exit 1
-  fi
-}
 
 remote_branch_exists() {
   git ls-remote --exit-code --heads origin "$1" >/dev/null 2>&1
@@ -110,14 +72,12 @@ cmd_prepare() {
 
   if [[ -z $name ]]; then
     err "missing release name"
-    echo >&2
     usage >&2
     exit 2
   fi
 
   if [[ ! $name =~ $release_re ]]; then
     err "invalid release name: '$name'"
-    echo >&2
     usage >&2
     exit 2
   fi
@@ -125,7 +85,8 @@ cmd_prepare() {
   local branch="release/$name"
 
   step "Preflight checks"
-  require_git_and_gh
+  require_git_repo
+  require_cmd gh https://cli.github.com
   require_clean_tree
 
   step "Probe remote state"
@@ -244,7 +205,8 @@ cmd_update() {
   done
 
   step "Preflight checks"
-  require_git_and_gh
+  require_git_repo
+  require_cmd gh https://cli.github.com
   require_clean_tree
 
   local current

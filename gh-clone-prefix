@@ -7,6 +7,9 @@
 set -u
 set -o pipefail
 
+__lib="$(dirname -- "${BASH_SOURCE[0]}")/.lib/common.sh"
+. "$__lib" || { echo "fatal: cannot source $__lib" >&2; exit 1; }
+
 usage() {
   cat <<'EOF'
 Usage: gh-clone-prefix [-f|--force] [--include-archived] [-h|--help] <org> <prefix>
@@ -26,24 +29,6 @@ Requires `gh` (https://cli.github.com), authenticated.
 EOF
 }
 
-if [[ -t 1 ]]; then
-  c_red=$'\033[0;31m'
-  c_yellow=$'\033[0;33m'
-  c_green=$'\033[0;32m'
-  c_dim=$'\033[2m'
-  c_reset=$'\033[0m'
-else
-  c_red='' c_yellow='' c_green='' c_dim='' c_reset=''
-fi
-
-err() {
-  printf '%sgh-clone-prefix: %s%s\n' "$c_red" "$*" "$c_reset" >&2
-}
-
-info() {
-  printf '%s%s%s\n' "$c_dim" "$*" "$c_reset"
-}
-
 force=0
 include_archived=0
 positional=()
@@ -54,14 +39,13 @@ while (( $# > 0 )); do
     --include-archived) include_archived=1; shift ;;
     -h|--help)          usage; exit 0 ;;
     --)                 shift; while (( $# > 0 )); do positional+=("$1"); shift; done; break ;;
-    -*)                 err "unknown option: $1"; echo >&2; usage >&2; exit 2 ;;
+    -*)                 err "unknown option: $1"; usage >&2; exit 2 ;;
     *)                  positional+=("$1"); shift ;;
   esac
 done
 
 if (( ${#positional[@]} != 2 )); then
   err "expected <org> and <prefix>, got ${#positional[@]} positional arg(s)"
-  echo >&2
   usage >&2
   exit 2
 fi
@@ -69,10 +53,7 @@ fi
 org=${positional[0]}
 prefix=${positional[1]}
 
-if ! command -v gh >/dev/null 2>&1; then
-  err "gh CLI not found in PATH (https://cli.github.com)"
-  exit 1
-fi
+require_cmd gh https://cli.github.com
 
 info "Fetching repos in '$org' matching prefix '$prefix'..."
 

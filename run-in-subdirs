@@ -5,6 +5,9 @@
 set -u
 set -o pipefail
 
+__lib="$(dirname -- "${BASH_SOURCE[0]}")/.lib/common.sh"
+. "$__lib" || { echo "fatal: cannot source $__lib" >&2; exit 1; }
+
 usage() {
   cat <<'EOF'
 Usage: run-in-subdirs [-c|--continue] [-h|--help] <command>
@@ -29,35 +32,25 @@ while (( $# > 0 )); do
     -c|--continue) continue_on_error=1; shift ;;
     -h|--help)     usage; exit 0 ;;
     --)            shift; break ;;
-    -*)            printf 'run-in-subdirs: unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+    -*)            err "unknown option: $1"; usage >&2; exit 2 ;;
     *)             break ;;
   esac
 done
 
 if (( $# < 1 )); then
-  printf 'run-in-subdirs: missing command\n\n' >&2
+  err "missing command"
   usage >&2
   exit 2
 fi
 
 cmd="$*"
 
-if [[ -t 1 ]]; then
-  c_red=$'\033[0;31m'
-  c_yellow=$'\033[0;33m'
-  c_green=$'\033[0;32m'
-  c_dim=$'\033[2m'
-  c_reset=$'\033[0m'
-else
-  c_red='' c_yellow='' c_green='' c_dim='' c_reset=''
-fi
-
 shopt -s nullglob
 dirs=( */ )
 shopt -u nullglob
 
 if (( ${#dirs[@]} == 0 )); then
-  printf '%sNo subdirectories found in %s%s\n' "$c_dim" "$PWD" "$c_reset"
+  info "No subdirectories found in $PWD"
   exit 0
 fi
 
@@ -71,8 +64,7 @@ for entry in "${dirs[@]}"; do
   (( i++ ))
   dir="${entry%/}"
 
-  printf '\n%s==> [%d/%d] Running %s"%s"%s in %s"%s"%s\n' \
-    "$c_dim" "$i" "$total" "$c_red" "$cmd" "$c_dim" "$c_yellow" "$dir" "$c_reset"
+  step "[$i/$total] Running \"$cmd\" in \"$dir\""
 
   ( cd "$dir" && eval "$cmd" )
   rc=$?
@@ -83,9 +75,9 @@ for entry in "${dirs[@]}"; do
   else
     (( failed++ ))
     failed_dirs+=( "$dir" )
-    printf '%sERROR: command failed in "%s" (exit %d)%s\n' "$c_red" "$dir" "$rc" "$c_reset" >&2
+    err "command failed in \"$dir\" (exit $rc)"
     if (( continue_on_error == 0 )); then
-      printf '%sStopping. Re-run with -c to continue past failures.%s\n' "$c_red" "$c_reset" >&2
+      err "stopping; re-run with -c to continue past failures"
       exit "$rc"
     fi
   fi
