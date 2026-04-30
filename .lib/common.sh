@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared helpers for ~/commands scripts. Source from each script:
+# Shared helpers for ~/toolbox scripts. Source from each script:
 #
 #   __lib="$(dirname -- "${BASH_SOURCE[0]}")/.lib/common.sh"
 #   . "$__lib" || { echo "fatal: cannot source $__lib" >&2; exit 1; }

@@ -1,21 +1,21 @@
-# commands
+# toolbox
 
-Personal `~/commands` toolbox: small shell scripts that get auto-added to `PATH`.
+Personal `~/toolbox`: small shell scripts that get auto-added to `PATH`.
 
 ## Install
 
-Clone this repo to `~/commands`, then source `.commandrc` from your shell rc:
+Clone this repo to `~/toolbox`, then source `.toolboxrc` from your shell rc:
 
 ```sh
-git clone <this-repo> ~/commands
-echo '. ~/commands/.commandrc' >> ~/.zshrc   # or ~/.bashrc
+git clone <this-repo> ~/toolbox
+echo '. ~/toolbox/.toolboxrc' >> ~/.zshrc   # or ~/.bashrc
 ```
 
-Open a new shell. Every executable file at the top level of `~/commands` is now a command. The checked-in scripts already have the executable bit set; for anything new, `chmod +x` it.
+Open a new shell. Every executable file at the top level of `~/toolbox` is now a command. The checked-in scripts already have the executable bit set; for anything new, `chmod +x` it.
 
 ## How it works
 
-[.commandrc](.commandrc) prepends `~/commands` to `PATH` (idempotently — re-sourcing is a no-op). Shared helpers live in [.lib/common.sh](.lib/common.sh) and are sourced by each script for colored output, logging, and a few preflight checks (`require_cmd`, `require_git_repo`, `require_clean_tree`).
+[.toolboxrc](.toolboxrc) prepends `~/toolbox` to `PATH` (idempotently — re-sourcing is a no-op). Shared helpers live in [.lib/common.sh](.lib/common.sh) and are sourced by each script for colored output, logging, and a few preflight checks (`require_cmd`, `require_git_repo`, `require_clean_tree`).
 
 ## Commands
 
