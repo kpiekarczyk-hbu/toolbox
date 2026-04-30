@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# release: prepare and update release branches/tags/GitHub releases.
+#
+#   release prepare [--repair] <release-name>
+#       Cut release/<name>, tag it, and publish a GitHub release.
+#       Idempotent: if the release is already fully prepared, exits 0.
+#       Use --repair to fill in missing pieces of a partial state.
+#
+#   release update
+#       Run on a release/* branch. Sync with origin, move the tag to HEAD,
+#       and regenerate the GitHub release notes.
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  release prepare [--repair] <release-name>
+  release update
+  release -h | --help
+
+Release name format:
+  Main cycle:  yymm-(a|b|c)        e.g. 2605-a, 2402-b, 2511-c
+  Off cycle:   yymm-(a|b|c)-N0     e.g. 2605-a-10, 2405-b-90  (N is 1-9)
+
+Subcommands:
+  prepare   Create release/<name>, tag it, and publish a GitHub release.
+            If everything already exists, exits 0. With --repair, fills in
+            any missing pieces of a partial state.
+  update    Run on release/<name>. Pulls --ff-only, moves <name> tag to HEAD,
+            and regenerates the GitHub release notes from the API.
+
+Both subcommands require a git repo, a clean working tree, and `gh`
+installed and authenticated.
+EOF
+}
+
+if [[ -t 1 ]]; then
+  c_red=$'\033[0;31m'
+  c_yellow=$'\033[0;33m'
+  c_green=$'\033[0;32m'
+  c_dim=$'\033[2m'
+  c_reset=$'\033[0m'
+else
+  c_red='' c_yellow='' c_green='' c_dim='' c_reset=''
+fi
+
+err() {
+  printf '%srelease: %s%s\n' "$c_red" "$*" "$c_reset" >&2
+}
+
+step() {
+  printf '\n%s==> %s%s%s\n' "$c_dim" "$c_yellow" "$*" "$c_reset"
+}
+
+run() {
+  printf '%s   $ %s%s\n' "$c_dim" "$*" "$c_reset"
+  "$@"
+}
+
+release_re='^[0-9]{2}(0[1-9]|1[0-2])-[abc](-[1-9]0)?$'
+
+require_git_and_gh() {
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    err "not inside a git repository"
+    exit 1
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    err "gh CLI not found in PATH (https://cli.github.com)"
+    exit 1
+  fi
+}
+
+require_clean_tree() {
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    err "working tree is not clean — commit or stash changes first"
+    exit 1
+  fi
+}
+
+remote_branch_exists() {
+  git ls-remote --exit-code --heads origin "$1" >/dev/null 2>&1
+}
+
+remote_tag_exists() {
+  git ls-remote --exit-code --tags origin "$1" >/dev/null 2>&1
+}
+
+gh_release_exists() {
+  gh release view "$1" >/dev/null 2>&1
+}
+
+cmd_prepare() {
+  local repair=0
+  local name=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --repair) repair=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      --) shift; break ;;
+      -*) err "unknown flag: $1"; usage >&2; exit 2 ;;
+      *)
+        if [[ -n $name ]]; then
+          err "expected one release name, got extra arg '$1'"
+          exit 2
+        fi
+        name=$1; shift ;;
+    esac
+  done
+
+  if [[ -z $name ]]; then
+    err "missing release name"
+    echo >&2
+    usage >&2
+    exit 2
+  fi
+
+  if [[ ! $name =~ $release_re ]]; then
+    err "invalid release name: '$name'"
+    echo >&2
+    usage >&2
+    exit 2
+  fi
+
+  local branch="release/$name"
+
+  step "Preflight checks"
+  require_git_and_gh
+  require_clean_tree
+
+  step "Probe remote state"
+  run git fetch origin --tags --quiet
+
+  local has_branch=0 has_tag=0 has_release=0
+  remote_branch_exists "$branch" && has_branch=1
+  remote_tag_exists "$name" && has_tag=1
+  gh_release_exists "$name" && has_release=1
+
+  printf '   branch=%s tag=%s release=%s\n' "$has_branch" "$has_tag" "$has_release"
+
+  if (( has_branch && has_tag && has_release )); then
+    printf '\n%sRelease %s%s%s is already prepared.%s\n' \
+      "$c_green" "$c_reset" "$name" "$c_green" "$c_reset"
+    exit 0
+  fi
+
+  if (( has_branch || has_tag || has_release )); then
+    if (( ! repair )); then
+      err "partial state for '$name' (branch=$has_branch tag=$has_tag release=$has_release)"
+      err "re-run with: release prepare --repair $name"
+      exit 1
+    fi
+    repair_prepare "$name" "$branch" "$has_branch" "$has_tag" "$has_release"
+    return
+  fi
+
+  prepare_from_scratch "$name" "$branch"
+}
+
+prepare_from_scratch() {
+  local name=$1 branch=$2
+
+  if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+    err "branch '$branch' already exists locally (but not on origin) — clean up first"
+    exit 1
+  fi
+
+  if git rev-parse --verify --quiet "refs/tags/$name" >/dev/null; then
+    err "tag '$name' already exists locally (but not on origin) — clean up first"
+    exit 1
+  fi
+
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+  step "Sync develop with origin"
+  if [[ $current_branch != "develop" ]]; then
+    run git checkout develop
+  fi
+  run git pull --ff-only origin develop
+
+  step "Create release branch '$branch'"
+  run git checkout -b "$branch"
+  run git push --set-upstream origin "$branch"
+
+  step "Tag '$name'"
+  run git tag -a "$name" -m "Release $name"
+  run git push origin "$name"
+
+  step "Create GitHub release '$name'"
+  run gh release create "$name" \
+    --target "$branch" \
+    --title "$name" \
+    --generate-notes
+
+  printf '\n%sDone.%s Branch %s, tag %s, and GitHub release published.\n' \
+    "$c_green" "$c_reset" "$branch" "$name"
+}
+
+repair_prepare() {
+  local name=$1 branch=$2 has_branch=$3 has_tag=$4 has_release=$5
+
+  if (( ! has_branch )); then
+    err "remote branch '$branch' is missing — repair cannot recreate it; resolve manually"
+    exit 1
+  fi
+
+  local repaired=()
+
+  if (( ! has_tag )); then
+    local target="origin/$branch"
+    if (( has_release )); then
+      step "Resolve target commit from existing release"
+      target=$(gh release view "$name" --json targetCommitish -q .targetCommitish)
+      printf '   target=%s\n' "$target"
+    fi
+
+    step "Tag '$name' (repair)"
+    run git fetch origin "$branch" --quiet
+    run git tag -a "$name" -m "Release $name" "$target"
+    run git push origin "$name"
+    repaired+=("tag")
+  fi
+
+  if (( ! has_release )); then
+    step "Create GitHub release '$name' (repair)"
+    run gh release create "$name" \
+      --target "$branch" \
+      --title "$name" \
+      --generate-notes
+    repaired+=("GitHub release")
+  fi
+
+  printf '\n%sRepaired:%s %s.\n' \
+    "$c_green" "$c_reset" "$(IFS=', '; echo "${repaired[*]}")"
+}
+
+cmd_update() {
+  while (( $# > 0 )); do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      *) err "unknown arg: $1"; usage >&2; exit 2 ;;
+    esac
+  done
+
+  step "Preflight checks"
+  require_git_and_gh
+  require_clean_tree
+
+  local current
+  current=$(git rev-parse --abbrev-ref HEAD)
+  if [[ $current != release/* ]]; then
+    err "must be run on a release/* branch (currently on '$current')"
+    exit 2
+  fi
+
+  local name=${current#release/}
+  if [[ ! $name =~ $release_re ]]; then
+    err "branch name '$current' does not match release/<valid-name>"
+    exit 2
+  fi
+
+  if ! gh_release_exists "$name"; then
+    err "no GitHub release found for '$name' — run 'release prepare $name' first"
+    exit 1
+  fi
+
+  step "Sync '$current' with origin"
+  run git fetch origin --quiet
+  if ! git rev-parse --verify --quiet "refs/remotes/origin/$current" >/dev/null; then
+    err "no upstream branch 'origin/$current' — push the branch first"
+    exit 1
+  fi
+
+  local ahead
+  ahead=$(git rev-list --count "origin/$current..HEAD")
+  if (( ahead > 0 )); then
+    err "local branch has $ahead unpushed commit(s) — push them first"
+    exit 1
+  fi
+  run git pull --ff-only origin "$current"
+
+  step "Move tag '$name' to HEAD"
+  run git tag -f -a "$name" -m "Release $name"
+  run git push --force origin "$name"
+
+  step "Regenerate GitHub release notes"
+  local repo notes
+  repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+  notes=$(gh api "repos/$repo/releases/generate-notes" \
+    -f tag_name="$name" \
+    -f target_commitish="$current" \
+    --jq .body)
+  run gh release edit "$name" --notes "$notes"
+
+  printf '\n%sUpdated.%s Tag %s now points at %s; release notes refreshed.\n' \
+    "$c_green" "$c_reset" "$name" "$(git rev-parse --short HEAD)"
+}
+
+case "${1-}" in
+  -h|--help|"") usage; exit 0 ;;
+  prepare) shift; cmd_prepare "$@" ;;
+  update)  shift; cmd_update "$@" ;;
+  *) err "unknown subcommand: $1"; usage >&2; exit 2 ;;
+esac
