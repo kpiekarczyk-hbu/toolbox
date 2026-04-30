@@ -52,6 +52,95 @@ gh_release_exists() {
   gh release view "$1" >/dev/null 2>&1
 }
 
+gh_repo_has_releases() {
+  [[ -n "$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')" ]]
+}
+
+list_release_tags() {
+  git for-each-ref --sort=creatordate --format='%(refname:short)' refs/tags \
+    | grep -E "$release_re" || true
+}
+
+# Sets opt_backfill and opt_baseline_tag in the caller's scope (dynamic-scope).
+prompt_first_release() {
+  local skip_tag=$1
+  local tags=() t
+  while IFS= read -r t; do
+    [[ -z $t || $t == "$skip_tag" ]] && continue
+    tags+=("$t")
+  done < <(list_release_tags)
+
+  (( ${#tags[@]} == 0 )) && return 0
+
+  step "First-release options"
+  printf '%s   This repo has no GitHub releases yet, but %d prior tag(s) match the release format:%s\n' \
+    "$c_dim" "${#tags[@]}" "$c_reset"
+  local i
+  for i in "${!tags[@]}"; do
+    printf '%s     - %s%s\n' "$c_dim" "${tags[$i]}" "$c_reset"
+  done
+  printf '\n   1) Backfill GitHub releases for the prior tags (oldest to newest, auto-generated notes)\n'
+  printf "   2) Use a prior tag as the baseline for this release's notes\n"
+  printf '\n   Pick options [e.g. "1 2", "2", empty to skip]: '
+
+  local picks
+  IFS= read -r picks || picks=""
+
+  case " $picks " in
+    *" 1 "*) opt_backfill=1 ;;
+  esac
+
+  case " $picks " in
+    *" 2 "*)
+      printf '\n   Pick baseline tag (commits between this tag and the new release will populate the notes):\n'
+      for i in "${!tags[@]}"; do
+        printf '     %d) %s\n' "$((i+1))" "${tags[$i]}"
+      done
+      printf '\n   Number: '
+      local pick
+      IFS= read -r pick || pick=""
+      if [[ $pick =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#tags[@]} )); then
+        opt_baseline_tag="${tags[$((pick-1))]}"
+      else
+        err "invalid selection: '$pick' — skipping baseline"
+      fi
+      ;;
+  esac
+}
+
+do_backfill() {
+  local skip_tag=$1
+  step "Backfill GitHub releases for prior tags"
+  local t
+  while IFS= read -r t; do
+    [[ -z $t || $t == "$skip_tag" ]] && continue
+    if gh_release_exists "$t"; then
+      info "   skipping $t — release already exists"
+      continue
+    fi
+    run gh release create "$t" --title "$t" --generate-notes
+  done < <(list_release_tags)
+}
+
+create_gh_release() {
+  local name=$1 branch=$2 baseline=${3:-}
+  if [[ -n $baseline ]]; then
+    local repo notes
+    repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+    notes=$(gh api "repos/$repo/releases/generate-notes" \
+      -f tag_name="$name" \
+      -f target_commitish="$branch" \
+      -f previous_tag_name="$baseline" \
+      --jq .body)
+    run gh release create "$name" --target "$branch" --title "$name" --notes "$notes"
+  else
+    run gh release create "$name" \
+      --target "$branch" \
+      --title "$name" \
+      --generate-notes
+  fi
+}
+
 cmd_prepare() {
   local repair=0
   local name=""
@@ -105,21 +194,30 @@ cmd_prepare() {
     exit 0
   fi
 
+  local opt_backfill=0 opt_baseline_tag=""
+  if (( ! has_release )) && [[ -t 0 ]] && ! gh_repo_has_releases; then
+    prompt_first_release "$name"
+  fi
+
+  if (( opt_backfill )); then
+    do_backfill "$name"
+  fi
+
   if (( has_branch || has_tag || has_release )); then
     if (( ! repair )); then
       err "partial state for '$name' (branch=$has_branch tag=$has_tag release=$has_release)"
       err "re-run with: release prepare --repair $name"
       exit 1
     fi
-    repair_prepare "$name" "$branch" "$has_branch" "$has_tag" "$has_release"
+    repair_prepare "$name" "$branch" "$has_branch" "$has_tag" "$has_release" "$opt_baseline_tag"
     return
   fi
 
-  prepare_from_scratch "$name" "$branch"
+  prepare_from_scratch "$name" "$branch" "$opt_baseline_tag"
 }
 
 prepare_from_scratch() {
-  local name=$1 branch=$2
+  local name=$1 branch=$2 baseline=${3:-}
 
   if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
     err "branch '$branch' already exists locally (but not on origin) — clean up first"
@@ -149,17 +247,14 @@ prepare_from_scratch() {
   run git push origin "$name"
 
   step "Create GitHub release '$name'"
-  run gh release create "$name" \
-    --target "$branch" \
-    --title "$name" \
-    --generate-notes
+  create_gh_release "$name" "$branch" "$baseline"
 
   printf '\n%sDone.%s Branch %s, tag %s, and GitHub release published.\n' \
     "$c_green" "$c_reset" "$branch" "$name"
 }
 
 repair_prepare() {
-  local name=$1 branch=$2 has_branch=$3 has_tag=$4 has_release=$5
+  local name=$1 branch=$2 has_branch=$3 has_tag=$4 has_release=$5 baseline=${6:-}
 
   if (( ! has_branch )); then
     err "remote branch '$branch' is missing — repair cannot recreate it; resolve manually"
@@ -185,10 +280,7 @@ repair_prepare() {
 
   if (( ! has_release )); then
     step "Create GitHub release '$name' (repair)"
-    run gh release create "$name" \
-      --target "$branch" \
-      --title "$name" \
-      --generate-notes
+    create_gh_release "$name" "$branch" "$baseline"
     repaired+=("GitHub release")
   fi
 
