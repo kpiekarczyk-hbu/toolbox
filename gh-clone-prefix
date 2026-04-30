@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# gh-clone-prefix: bulk-clone repos from a GitHub org/user whose names start
+# with a given prefix into the current working directory.
+#
+# Per-repo failures are isolated: one repo failing does not stop the rest.
+
+set -u
+set -o pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: gh-clone-prefix [-f|--force] [--include-archived] [-h|--help] <org> <prefix>
+
+Clones every repo in <org> whose name starts with <prefix> into the
+current working directory.
+
+Options:
+  -f, --force          Re-clone repos that are already present locally.
+                       Only directories that look like git checkouts
+                       (contain .git) are removed and replaced; collisions
+                       with non-git directories are reported as errors.
+  --include-archived   Include archived repos. By default they are skipped.
+  -h, --help           Show this help and exit.
+
+Requires `gh` (https://cli.github.com), authenticated.
+EOF
+}
+
+if [[ -t 1 ]]; then
+  c_red=$'\033[0;31m'
+  c_yellow=$'\033[0;33m'
+  c_green=$'\033[0;32m'
+  c_dim=$'\033[2m'
+  c_reset=$'\033[0m'
+else
+  c_red='' c_yellow='' c_green='' c_dim='' c_reset=''
+fi
+
+err() {
+  printf '%sgh-clone-prefix: %s%s\n' "$c_red" "$*" "$c_reset" >&2
+}
+
+info() {
+  printf '%s%s%s\n' "$c_dim" "$*" "$c_reset"
+}
+
+force=0
+include_archived=0
+positional=()
+
+while (( $# > 0 )); do
+  case "$1" in
+    -f|--force)         force=1; shift ;;
+    --include-archived) include_archived=1; shift ;;
+    -h|--help)          usage; exit 0 ;;
+    --)                 shift; while (( $# > 0 )); do positional+=("$1"); shift; done; break ;;
+    -*)                 err "unknown option: $1"; echo >&2; usage >&2; exit 2 ;;
+    *)                  positional+=("$1"); shift ;;
+  esac
+done
+
+if (( ${#positional[@]} != 2 )); then
+  err "expected <org> and <prefix>, got ${#positional[@]} positional arg(s)"
+  echo >&2
+  usage >&2
+  exit 2
+fi
+
+org=${positional[0]}
+prefix=${positional[1]}
+
+if ! command -v gh >/dev/null 2>&1; then
+  err "gh CLI not found in PATH (https://cli.github.com)"
+  exit 1
+fi
+
+info "Fetching repos in '$org' matching prefix '$prefix'..."
+
+# Tab-separated: nameWithOwner<TAB>isArchived
+repo_lines=$(gh repo list "$org" --limit 1000 \
+  --json name,nameWithOwner,isArchived \
+  --jq ".[] | select(.name | startswith(\"$prefix\")) | [.nameWithOwner, (.isArchived|tostring)] | @tsv")
+rc=$?
+if (( rc != 0 )); then
+  err "failed to list repos for '$org' (gh exit $rc)"
+  exit 1
+fi
+
+if [[ -z $repo_lines ]]; then
+  info "No repos found in '$org' with prefix '$prefix'."
+  exit 0
+fi
+
+repos=()
+while IFS= read -r line; do
+  [[ -n $line ]] && repos+=("$line")
+done <<< "$repo_lines"
+
+total=${#repos[@]}
+printf '%sFound %d repo(s).%s force=%d include_archived=%d cwd=%s\n' \
+  "$c_dim" "$total" "$c_reset" "$force" "$include_archived" "$PWD"
+
+cloned=0
+skipped=0
+failed=0
+failed_repos=()
+
+# Returns: 0 cloned, 2 skipped, 1 failed.
+clone_one() {
+  local repo=$1 archived=$2 idx=$3 total=$4
+  local dir=${repo##*/}
+
+  if [[ $archived == "true" && $include_archived -eq 0 ]]; then
+    printf '%s[%d/%d] skip%s %s %s(archived)%s\n' \
+      "$c_yellow" "$idx" "$total" "$c_reset" "$repo" "$c_dim" "$c_reset"
+    return 2
+  fi
+
+  if [[ -e $dir ]]; then
+    if (( force )); then
+      if [[ -d $dir && -e $dir/.git ]]; then
+        printf '%s[%d/%d] replace%s %s %s(removing existing checkout)%s\n' \
+          "$c_yellow" "$idx" "$total" "$c_reset" "$repo" "$c_dim" "$c_reset"
+        if ! rm -rf -- "$dir"; then
+          err "[$idx/$total] failed to remove existing '$dir'"
+          return 1
+        fi
+      else
+        err "[$idx/$total] '$dir' exists and is not a git checkout — refusing to replace (skip --force for this one or remove manually)"
+        return 1
+      fi
+    else
+      printf '%s[%d/%d] skip%s %s %s(already exists; pass --force to replace)%s\n' \
+        "$c_yellow" "$idx" "$total" "$c_reset" "$repo" "$c_dim" "$c_reset"
+      return 2
+    fi
+  fi
+
+  printf '%s[%d/%d] clone%s %s\n' "$c_green" "$idx" "$total" "$c_reset" "$repo"
+  if ! gh repo clone "$repo"; then
+    err "[$idx/$total] clone failed for '$repo'"
+    return 1
+  fi
+  return 0
+}
+
+i=0
+for entry in "${repos[@]}"; do
+  (( i++ ))
+  IFS=$'\t' read -r repo archived <<< "$entry"
+
+  clone_one "$repo" "$archived" "$i" "$total"
+  rc=$?
+  case $rc in
+    0) (( cloned++ )) ;;
+    2) (( skipped++ )) ;;
+    *) (( failed++ )); failed_repos+=("$repo") ;;
+  esac
+done
+
+printf '\n%sDone.%s %d cloned, %d skipped, %d failed (of %d).\n' \
+  "$c_dim" "$c_reset" "$cloned" "$skipped" "$failed" "$total"
+
+if (( failed > 0 )); then
+  printf '%sFailed:%s %s\n' "$c_red" "$c_reset" "${failed_repos[*]}" >&2
+  exit 1
+fi
