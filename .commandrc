@@ -1,0 +1,5 @@
+# Add ~/commands to PATH so any executable script dropped in is runnable.
+case ":$PATH:" in
+  *":$HOME/commands:"*) ;;
+  *) export PATH="$HOME/commands:$PATH" ;;
+esac
