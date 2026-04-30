@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Run a command in every visible subdirectory of the current working directory.
+# Stops on first error by default; pass -c/--continue to keep going.
+
+set -u
+set -o pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: run-in-subdirs [-c|--continue] [-h|--help] <command>
+
+Runs <command> in each visible subdirectory of the current working directory.
+
+Options:
+  -c, --continue   Continue iterating even if the command fails in a subdir.
+                   Without this flag, the script stops on the first error.
+  -h, --help       Show this help and exit.
+
+The command is a single string evaluated by the shell, so pipes,
+redirects, and && work as expected:
+
+  run-in-subdirs 'git pull && npm install'
+EOF
+}
+
+continue_on_error=0
+while (( $# > 0 )); do
+  case "$1" in
+    -c|--continue) continue_on_error=1; shift ;;
+    -h|--help)     usage; exit 0 ;;
+    --)            shift; break ;;
+    -*)            printf 'run-in-subdirs: unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+    *)             break ;;
+  esac
+done
+
+if (( $# < 1 )); then
+  printf 'run-in-subdirs: missing command\n\n' >&2
+  usage >&2
+  exit 2
+fi
+
+cmd="$*"
+
+if [[ -t 1 ]]; then
+  c_red=$'\033[0;31m'
+  c_yellow=$'\033[0;33m'
+  c_green=$'\033[0;32m'
+  c_dim=$'\033[2m'
+  c_reset=$'\033[0m'
+else
+  c_red='' c_yellow='' c_green='' c_dim='' c_reset=''
+fi
+
+shopt -s nullglob
+dirs=( */ )
+shopt -u nullglob
+
+if (( ${#dirs[@]} == 0 )); then
+  printf '%sNo subdirectories found in %s%s\n' "$c_dim" "$PWD" "$c_reset"
+  exit 0
+fi
+
+total=${#dirs[@]}
+succeeded=0
+failed=0
+failed_dirs=()
+i=0
+
+for entry in "${dirs[@]}"; do
+  (( i++ ))
+  dir="${entry%/}"
+
+  printf '\n%s==> [%d/%d] Running %s"%s"%s in %s"%s"%s\n' \
+    "$c_dim" "$i" "$total" "$c_red" "$cmd" "$c_dim" "$c_yellow" "$dir" "$c_reset"
+
+  ( cd "$dir" && eval "$cmd" )
+  rc=$?
+
+  if (( rc == 0 )); then
+    (( succeeded++ ))
+    printf '%s    ok%s\n' "$c_green" "$c_reset"
+  else
+    (( failed++ ))
+    failed_dirs+=( "$dir" )
+    printf '%sERROR: command failed in "%s" (exit %d)%s\n' "$c_red" "$dir" "$rc" "$c_reset" >&2
+    if (( continue_on_error == 0 )); then
+      printf '%sStopping. Re-run with -c to continue past failures.%s\n' "$c_red" "$c_reset" >&2
+      exit "$rc"
+    fi
+  fi
+done
+
+printf '\n%sDone.%s %d succeeded, %d failed (of %d).\n' \
+  "$c_dim" "$c_reset" "$succeeded" "$failed" "$total"
+
+if (( failed > 0 )); then
+  printf '%sFailed in:%s %s\n' "$c_red" "$c_reset" "${failed_dirs[*]}" >&2
+  exit 1
+fi
