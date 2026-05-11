@@ -4,14 +4,22 @@ Personal `~/toolbox`: small shell scripts that get auto-added to `PATH`.
 
 ## Install
 
-Clone this repo to `~/toolbox`, then source `.toolboxrc` from your shell rc:
-
 ```sh
-git clone <this-repo> ~/toolbox
-echo '. ~/toolbox/.toolboxrc' >> ~/.zshrc   # or ~/.bashrc
+curl -fsSL https://raw.githubusercontent.com/kpiekarczyk-hbu/toolbox/main/install.sh | bash
 ```
 
-Open a new shell. Every executable file in `~/toolbox/scripts` is now a command. The checked-in scripts already have the executable bit set; for anything new, `chmod +x` it.
+[install.sh](install.sh) clones this repo to `~/toolbox` and appends a single source line to your shell rc (`~/.zshrc` for zsh, `~/.bash_profile` on macOS bash, `~/.bashrc` on Linux bash). It's idempotent — re-running updates the checkout with `git pull --ff-only` and leaves the rc alone if the line is already there.
+
+Open a new shell (`exec "$SHELL" -l`). Every executable file in `~/toolbox/scripts` is now a command. The checked-in scripts already have the executable bit set; for anything new, `chmod +x` it.
+
+### Manual install
+
+If you'd rather not pipe to bash:
+
+```sh
+git clone https://github.com/kpiekarczyk-hbu/toolbox.git ~/toolbox
+echo '. ~/toolbox/.toolboxrc' >> ~/.zshrc   # or ~/.bashrc / ~/.bash_profile
+```
 
 ## How it works
 
