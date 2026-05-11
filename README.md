@@ -27,7 +27,7 @@ echo '. ~/toolbox/.toolboxrc' >> ~/.zshrc   # or ~/.bashrc / ~/.bash_profile
 
 Shared helpers live in [scripts/.lib/common.sh](scripts/.lib/common.sh) and are sourced by each script for colored output, logging, and a few preflight checks (`require_cmd`, `require_git_repo`, `require_clean_tree`).
 
-Under zsh, `.toolboxrc` also wires up tab completion: it generates `~/toolbox/completions/_toolbox` on first source and adds the directory to `fpath`. It does **not** call `compinit` — that's left to your existing zsh setup (oh-my-zsh, prezto, or a hand-rolled `.zshrc` will already run it). If you don't have `compinit` anywhere, add `autoload -Uz compinit && compinit` to your `.zshrc` after the toolbox source line.
+Under zsh, `.toolboxrc` also wires up tab completion: it generates `~/toolbox/completions/_toolbox` on first source and adds the directory to `fpath`. If `compinit` has already run by the time `.toolboxrc` is sourced (e.g. a framework like oh-my-zsh or prezto ran it earlier in `.zshrc`), the fpath addition is too late for its scan, so `.toolboxrc` registers `_toolbox` via `compdef` directly. If `compinit` hasn't run yet, the fpath entry alone is enough — it'll be picked up when your setup eventually calls `compinit`. If you don't have `compinit` anywhere, add `autoload -Uz compinit && compinit` to your `.zshrc` after the toolbox source line.
 
 ## Commands
 

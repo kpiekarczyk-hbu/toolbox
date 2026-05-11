@@ -4,12 +4,18 @@ case ":$PATH:" in
   *) export PATH="$HOME/toolbox/bin:$PATH" ;;
 esac
 
-# zsh: wire completions. Populate on first source; add to fpath so the
-# user's existing compinit picks _toolbox up. compinit itself is left
-# to the user's setup (oh-my-zsh / prezto / hand-rolled .zshrc).
+# zsh: wire completions. Populate on first source and add to fpath. If the
+# user's setup (oh-my-zsh, prezto, etc.) already ran compinit before sourcing
+# this file, fpath came too late for its scan — register with compdef directly
+# so completion works in this shell. If compinit hasn't run yet, the fpath
+# entry alone is enough — the user's eventual compinit will pick _toolbox up.
 if [ -n "${ZSH_VERSION-}" ]; then
   if [ ! -f "$HOME/toolbox/completions/_toolbox" ]; then
     "$HOME/toolbox/bin/toolbox" completions --write >/dev/null 2>&1 || true
   fi
   fpath=("$HOME/toolbox/completions" $fpath)
+  if (( ${+functions[compdef]} )); then
+    autoload -Uz _toolbox
+    compdef _toolbox toolbox
+  fi
 fi
