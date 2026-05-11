@@ -1,5 +1,5 @@
-# Add ~/toolbox to PATH so any executable script dropped in is runnable.
+# Add ~/toolbox/scripts to PATH so any executable script dropped in is runnable.
 case ":$PATH:" in
-  *":$HOME/toolbox:"*) ;;
-  *) export PATH="$HOME/toolbox:$PATH" ;;
+  *":$HOME/toolbox/scripts:"*) ;;
+  *) export PATH="$HOME/toolbox/scripts:$PATH" ;;
 esac
