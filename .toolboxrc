@@ -1,5 +1,15 @@
-# Add ~/toolbox/scripts to PATH so any executable script dropped in is runnable.
+# Add ~/toolbox/bin to PATH so the `toolbox` command is runnable.
 case ":$PATH:" in
-  *":$HOME/toolbox/scripts:"*) ;;
-  *) export PATH="$HOME/toolbox/scripts:$PATH" ;;
+  *":$HOME/toolbox/bin:"*) ;;
+  *) export PATH="$HOME/toolbox/bin:$PATH" ;;
 esac
+
+# zsh: wire completions. Populate on first source; add to fpath so the
+# user's existing compinit picks _toolbox up. compinit itself is left
+# to the user's setup (oh-my-zsh / prezto / hand-rolled .zshrc).
+if [ -n "${ZSH_VERSION-}" ]; then
+  if [ ! -f "$HOME/toolbox/completions/_toolbox" ]; then
+    "$HOME/toolbox/bin/toolbox" completions --write >/dev/null 2>&1 || true
+  fi
+  fpath=("$HOME/toolbox/completions" $fpath)
+fi

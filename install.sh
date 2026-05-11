@@ -130,7 +130,7 @@ print_summary() {
   printf '\n'
   info "Activate in this shell:    exec \"\$SHELL\" -l"
   info "Or open a new terminal."
-  info "List installed commands:   ls \"$INSTALL_DIR/scripts\""
+  info "List installed commands:   toolbox list"
   info "Switch to SSH for push:    git -C \"$INSTALL_DIR\" remote set-url origin git@github.com:kpiekarczyk-hbu/toolbox.git"
 }
 

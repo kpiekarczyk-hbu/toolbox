@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# toolbox: manage the ~/toolbox checkout and dispatch into its scripts.
+
+set -u
+set -o pipefail
+
+TOOLBOX_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
+__lib="$TOOLBOX_DIR/scripts/.lib/common.sh"
+. "$__lib" || { echo "fatal: cannot source $__lib" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage: toolbox <command> [args...]
+
+Built-in commands:
+  check                       Check for upstream updates (read-only).
+  update [--branch BRANCH]    Fetch and fast-forward; --branch switches first.
+  reset                       Roll back to main and fast-forward.
+  list                        List built-in commands and dispatchable scripts.
+  completions [--write]       Print zsh completion to stdout, or write to disk.
+  help, -h, --help            Show this message.
+
+Dispatched commands:
+  toolbox <script> [args...]  Run scripts/<script> with the given args.
+                              See `toolbox list`.
+
+Built-in names take precedence — a script named the same as a built-in is shadowed.
+EOF
+}
+
+# ---------- helpers ----------
+
+list_scripts() {
+  local f name
+  for f in "$TOOLBOX_DIR"/scripts/*; do
+    [[ -f $f && -x $f ]] || continue
+    name=${f##*/}
+    printf '%s\n' "$name"
+  done | sort
+}
+
+extract_description() {
+  local file=$1 line desc base
+  base=${file##*/}
+  while IFS= read -r line; do
+    [[ $line == \#!* ]] && continue
+    if [[ $line == \#* ]]; then
+      desc=${line#\#}
+      desc=${desc# }
+      desc=${desc#"$base:"}
+      desc=${desc# }
+      printf '%s\n' "$desc"
+      return
+    fi
+    break
+  done < "$file"
+}
+
+# ---------- check ----------
+
+cmd_check() {
+  require_cmd git
+  step "Fetching origin"
+  run git -C "$TOOLBOX_DIR" fetch --quiet origin
+
+  local branch upstream
+  branch=$(git -C "$TOOLBOX_DIR" symbolic-ref --short HEAD 2>/dev/null || echo "DETACHED")
+  upstream=$(git -C "$TOOLBOX_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "origin/main")
+
+  local counts ahead behind
+  if ! counts=$(git -C "$TOOLBOX_DIR" rev-list --left-right --count "HEAD...$upstream" 2>/dev/null); then
+    err "could not compare HEAD with $upstream"
+    exit 1
+  fi
+  ahead=${counts%%[[:space:]]*}
+  behind=${counts##*[[:space:]]}
+
+  local dirty=clean
+  if ! git -C "$TOOLBOX_DIR" diff --quiet || ! git -C "$TOOLBOX_DIR" diff --cached --quiet; then
+    dirty=dirty
+  fi
+
+  info "branch:   $branch"
+  info "upstream: $upstream"
+  info "tree:     $dirty"
+
+  if (( ahead == 0 && behind == 0 )); then
+    printf '%sup to date%s\n' "$c_green" "$c_reset"
+  elif (( ahead > 0 && behind > 0 )); then
+    printf '%sdiverged (ahead %d, behind %d)%s\n' "$c_red" "$ahead" "$behind" "$c_reset"
+  elif (( ahead > 0 )); then
+    printf '%sahead %d%s\n' "$c_yellow" "$ahead" "$c_reset"
+  else
+    printf '%sbehind %d%s\n' "$c_yellow" "$behind" "$c_reset"
+    info "run: toolbox update"
+  fi
+}
+
+# ---------- update ----------
+
+cmd_update() {
+  require_cmd git
+
+  local branch=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --branch)  [[ $# -lt 2 ]] && { err "$1 requires an argument"; exit 2; }
+                 branch="$2"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *)         err "unexpected argument: $1"; exit 2 ;;
+    esac
+  done
+
+  (
+    cd "$TOOLBOX_DIR"
+    require_clean_tree
+    step "Fetching origin"
+    run git fetch --quiet origin --prune
+
+    if [[ -n $branch ]]; then
+      if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+        err "branch '$branch' does not exist on origin"
+        exit 2
+      fi
+      step "Checking out $branch"
+      run git checkout -B "$branch" --track "origin/$branch"
+    fi
+
+    step "Fast-forwarding"
+    run git pull --ff-only
+  ) || exit $?
+
+  cmd_completions --write >/dev/null
+}
+
+# ---------- reset ----------
+
+cmd_reset() {
+  require_cmd git
+  (
+    cd "$TOOLBOX_DIR"
+    require_clean_tree
+    step "Fetching origin"
+    run git fetch --quiet origin
+    local current
+    current=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    if [[ $current != "main" ]]; then
+      step "Switching to main (was on $current)"
+      run git checkout main
+    fi
+    step "Fast-forwarding main"
+    run git pull --ff-only
+  ) || exit $?
+
+  cmd_completions --write >/dev/null
+}
+
+# ---------- list ----------
+
+cmd_list() {
+  local builtins=(check update reset list completions help)
+  local builtin_desc=(
+    "Check for upstream updates (read-only)."
+    "Fetch and fast-forward; --branch BRANCH switches first."
+    "Roll back to main and fast-forward."
+    "List built-in commands and dispatchable scripts."
+    "Print zsh completion (or --write it to disk)."
+    "Show usage information."
+  )
+
+  local script_names=()
+  local n
+  while IFS= read -r n; do script_names+=("$n"); done < <(list_scripts)
+
+  local max=0
+  for n in "${builtins[@]}" "${script_names[@]}"; do
+    (( ${#n} > max )) && max=${#n}
+  done
+
+  printf '%sBuilt-in commands:%s\n' "$c_dim" "$c_reset"
+  local i
+  for i in "${!builtins[@]}"; do
+    printf '  %-*s  %s\n' "$max" "${builtins[$i]}" "${builtin_desc[$i]}"
+  done
+
+  if (( ${#script_names[@]} > 0 )); then
+    printf '\n%sScripts:%s\n' "$c_dim" "$c_reset"
+    for n in "${script_names[@]}"; do
+      local desc
+      desc=$(extract_description "$TOOLBOX_DIR/scripts/$n")
+      printf '  %-*s  %s\n' "$max" "$n" "$desc"
+    done
+  fi
+}
+
+# ---------- completions ----------
+
+# Sanitize a description for inclusion as a zsh _describe entry of the form
+# 'name:description' inside a single-quoted array element. Single quotes
+# break the surrounding quote; backslashes can pile up; long lines get noisy.
+sanitize_desc() {
+  local s=$1
+  s=${s//\'/}
+  s=${s//\\/}
+  if (( ${#s} > 80 )); then
+    s="${s:0:77}..."
+  fi
+  printf '%s' "$s"
+}
+
+generate_completion() {
+  local script_names=()
+  local n
+  while IFS= read -r n; do script_names+=("$n"); done < <(list_scripts)
+
+  local script_entries=""
+  for n in "${script_names[@]}"; do
+    local desc
+    desc=$(extract_description "$TOOLBOX_DIR/scripts/$n")
+    desc=$(sanitize_desc "$desc")
+    script_entries+="        '$n:$desc'"$'\n'
+  done
+
+  cat <<COMPLETION
+#compdef toolbox
+
+_toolbox() {
+  local curcontext="\$curcontext" state line
+  typeset -A opt_args
+
+  _arguments -C \\
+    '1: :->cmds' \\
+    '*:: :->args'
+
+  case \$state in
+    cmds)
+      local -a cmds
+      cmds=(
+        'check:check for upstream updates'
+        'update:update toolbox (--branch to switch)'
+        'reset:rollback to main'
+        'list:list available commands'
+        'completions:print or write zsh completions'
+        'help:show help'
+$script_entries      )
+      _describe -t commands 'toolbox command' cmds
+      ;;
+    args)
+      case \$line[1] in
+        update)
+          _arguments \\
+            '--branch[switch to branch before pulling]:branch:->branches'
+          case \$state in
+            branches)
+              local -a branches
+              branches=(\${(f)"\$(git -C "\$HOME/toolbox" for-each-ref --format='%(refname:short)' refs/remotes/origin/ 2>/dev/null | sed 's|^origin/||' | grep -v '^HEAD\$')"})
+              _describe -t branches 'remote branch' branches
+              ;;
+          esac
+          ;;
+        completions)
+          _arguments '--write[write completion file to disk]'
+          ;;
+        *)
+          _files
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_toolbox "\$@"
+COMPLETION
+}
+
+cmd_completions() {
+  local write=0
+  while (( $# > 0 )); do
+    case "$1" in
+      --write)   write=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *)         err "unexpected argument: $1"; exit 2 ;;
+    esac
+  done
+
+  if (( write )); then
+    local dir="$TOOLBOX_DIR/completions"
+    mkdir -p "$dir"
+    generate_completion > "$dir/_toolbox"
+    info "wrote $dir/_toolbox"
+  else
+    generate_completion
+  fi
+}
+
+# ---------- dispatcher ----------
+
+main() {
+  if (( $# == 0 )); then
+    usage
+    exit 0
+  fi
+
+  local cmd=$1
+  shift
+
+  case "$cmd" in
+    -h|--help|help) usage; exit 0 ;;
+    check)          cmd_check "$@" ;;
+    update)         cmd_update "$@" ;;
+    reset)          cmd_reset "$@" ;;
+    list)           cmd_list "$@" ;;
+    completions)    cmd_completions "$@" ;;
+    *)
+      local target="$TOOLBOX_DIR/scripts/$cmd"
+      if [[ -f $target && -x $target ]]; then
+        exec "$target" "$@"
+      fi
+      err "unknown command: $cmd"
+      info "try: toolbox list"
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
