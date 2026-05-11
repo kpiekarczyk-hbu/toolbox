@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# sync-subdir-repos: for every git repo directly under the current working
+# directory, fetch all updates (with tags), then check out the repo's main
+# branch (develop/main/master) and fast-forward it.
+
+set -u
+set -o pipefail
+
+__lib="$(dirname -- "${BASH_SOURCE[0]}")/.lib/common.sh"
+. "$__lib" || { echo "fatal: cannot source $__lib" >&2; exit 1; }
+
+usage() {
+  cat <<EOF
+Usage: sync-subdir-repos [options]
+
+For every visible subdirectory of the current working directory that is a
+git repository:
+
+  1. fetch all remotes, including tags, pruning stale refs
+  2. pick a main branch — preferring origin/HEAD if it points to
+     develop/main/master, otherwise the first of develop, main, master that
+     exists on origin
+  3. check out that branch and \`git pull --ff-only\`
+
+Repos with a dirty working tree are skipped at the checkout/pull step (the
+fetch still runs). Per-repo failures are reported at the end and do not
+stop the run.
+
+Options:
+$(filter_options_help)
+  -h, --help    Show this help and exit.
+EOF
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    -i|--include) [[ $# -lt 2 ]] && { err "$1 requires an argument"; exit 2; }
+                  filter_add_include "$2"; shift 2 ;;
+    -x|--exclude) [[ $# -lt 2 ]] && { err "$1 requires an argument"; exit 2; }
+                  filter_add_exclude "$2"; shift 2 ;;
+    -h|--help)    usage; exit 0 ;;
+    --)           shift; break ;;
+    *)            err "unexpected argument: $1"; usage >&2; exit 2 ;;
+  esac
+done
+
+require_cmd git
+
+collect_filtered_subdirs
+
+if (( ${#subdirs[@]} == 0 )); then
+  info "No subdirectories matched in $PWD"
+  exit 0
+fi
+
+repos=()
+for dir in "${subdirs[@]}"; do
+  if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    repos+=( "$dir" )
+  fi
+done
+
+if (( ${#repos[@]} == 0 )); then
+  info "No git repositories found in $PWD"
+  exit 0
+fi
+
+total=${#repos[@]}
+
+# Phase 1: fetch everything first, so all network IO happens up front.
+step "Phase 1/2: fetching $total repo(s)"
+fetch_failed=()
+i=0
+for dir in "${repos[@]}"; do
+  (( i++ ))
+  step "[$i/$total] fetch \"$dir\""
+  if ! ( cd "$dir" && run git fetch --all --tags --prune ); then
+    rc=$?
+    err "fetch failed in \"$dir\" (exit $rc)"
+    fetch_failed+=( "$dir" )
+  fi
+done
+
+# Pick the branch this repo treats as "main". Prefer origin/HEAD if it
+# resolves to one of the canonical names; otherwise fall back to the first
+# of develop, main, master that exists on origin.
+pick_main_branch() {
+  local d=$1 head b
+  head=$(git -C "$d" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  head=${head#origin/}
+  case "$head" in
+    develop|main|master) printf '%s\n' "$head"; return 0 ;;
+  esac
+  for b in develop main master; do
+    if git -C "$d" show-ref --verify --quiet "refs/remotes/origin/$b"; then
+      printf '%s\n' "$b"; return 0
+    fi
+  done
+  return 1
+}
+
+is_fetch_failed() {
+  local target=$1 f
+  (( ${#fetch_failed[@]} == 0 )) && return 1
+  for f in "${fetch_failed[@]}"; do
+    [[ $f == "$target" ]] && return 0
+  done
+  return 1
+}
+
+# Phase 2: switch to main branch and fast-forward.
+step "Phase 2/2: updating main branches"
+succeeded=0
+failed=0
+skipped=0
+failed_dirs=()
+skipped_dirs=()
+i=0
+for dir in "${repos[@]}"; do
+  (( i++ ))
+
+  if is_fetch_failed "$dir"; then
+    (( skipped++ ))
+    skipped_dirs+=( "$dir (fetch failed)" )
+    continue
+  fi
+
+  step "[$i/$total] update \"$dir\""
+
+  branch=$(pick_main_branch "$dir" || true)
+  if [[ -z ${branch:-} ]]; then
+    err "no develop/main/master branch found on origin for \"$dir\""
+    (( skipped++ ))
+    skipped_dirs+=( "$dir (no main branch)" )
+    continue
+  fi
+  info "main branch: $branch"
+
+  if ! ( cd "$dir" && git diff --quiet && git diff --cached --quiet ); then
+    err "working tree dirty in \"$dir\"; skipping checkout/pull"
+    (( skipped++ ))
+    skipped_dirs+=( "$dir (dirty)" )
+    continue
+  fi
+
+  if ( cd "$dir" && run git checkout "$branch" && run git pull --ff-only ); then
+    (( succeeded++ ))
+    printf '%s    ok%s\n' "$c_green" "$c_reset"
+  else
+    rc=$?
+    err "update failed in \"$dir\" (exit $rc)"
+    (( failed++ ))
+    failed_dirs+=( "$dir" )
+  fi
+done
+
+printf '\n%sDone.%s %d updated, %d skipped, %d failed (of %d).\n' \
+  "$c_dim" "$c_reset" "$succeeded" "$skipped" "$failed" "$total"
+
+if (( ${#skipped_dirs[@]} > 0 )); then
+  printf '%sSkipped:%s\n' "$c_yellow" "$c_reset"
+  for s in "${skipped_dirs[@]}"; do
+    printf '  - %s\n' "$s"
+  done
+fi
+
+if (( failed > 0 )); then
+  printf '%sFailed in:%s %s\n' "$c_red" "$c_reset" "${failed_dirs[*]}" >&2
+  exit 1
+fi

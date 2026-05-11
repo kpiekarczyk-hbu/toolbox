@@ -9,15 +9,17 @@ __lib="$(dirname -- "${BASH_SOURCE[0]}")/.lib/common.sh"
 . "$__lib" || { echo "fatal: cannot source $__lib" >&2; exit 1; }
 
 usage() {
-  cat <<'EOF'
-Usage: run-in-subdirs [-c|--continue] [-h|--help] <command>
+  cat <<EOF
+Usage: run-in-subdirs [options] <command>
 
 Runs <command> in each visible subdirectory of the current working directory.
 
 Options:
-  -c, --continue   Continue iterating even if the command fails in a subdir.
-                   Without this flag, the script stops on the first error.
-  -h, --help       Show this help and exit.
+  -c, --continue
+                Continue iterating even if the command fails in a subdir.
+                Without this flag, the script stops on the first error.
+$(filter_options_help)
+  -h, --help    Show this help and exit.
 
 The command is a single string evaluated by the shell, so pipes,
 redirects, and && work as expected:
@@ -30,6 +32,10 @@ continue_on_error=0
 while (( $# > 0 )); do
   case "$1" in
     -c|--continue) continue_on_error=1; shift ;;
+    -i|--include)  [[ $# -lt 2 ]] && { err "$1 requires an argument"; exit 2; }
+                   filter_add_include "$2"; shift 2 ;;
+    -x|--exclude)  [[ $# -lt 2 ]] && { err "$1 requires an argument"; exit 2; }
+                   filter_add_exclude "$2"; shift 2 ;;
     -h|--help)     usage; exit 0 ;;
     --)            shift; break ;;
     -*)            err "unknown option: $1"; usage >&2; exit 2 ;;
@@ -45,24 +51,21 @@ fi
 
 cmd="$*"
 
-shopt -s nullglob
-dirs=( */ )
-shopt -u nullglob
+collect_filtered_subdirs
 
-if (( ${#dirs[@]} == 0 )); then
-  info "No subdirectories found in $PWD"
+if (( ${#subdirs[@]} == 0 )); then
+  info "No subdirectories matched in $PWD"
   exit 0
 fi
 
-total=${#dirs[@]}
+total=${#subdirs[@]}
 succeeded=0
 failed=0
 failed_dirs=()
 i=0
 
-for entry in "${dirs[@]}"; do
+for dir in "${subdirs[@]}"; do
   (( i++ ))
-  dir="${entry%/}"
 
   step "[$i/$total] Running \"$cmd\" in \"$dir\""
 

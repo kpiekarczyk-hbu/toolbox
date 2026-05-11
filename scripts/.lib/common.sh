@@ -62,3 +62,73 @@ require_clean_tree() {
     exit 1
   fi
 }
+
+# Subdirectory filtering by glob pattern.
+#
+# Populate via filter_add_include / filter_add_exclude (each accepts a
+# single pattern OR a comma-separated list). Patterns are bash globs
+# matched against the basename of each direct subdirectory.
+#
+# Then call collect_filtered_subdirs to populate the global `subdirs`
+# array with matching names (no trailing slash).
+_filter_includes=()
+_filter_excludes=()
+
+filter_add_include() {
+  local IFS=',' p
+  for p in $1; do
+    [[ -n $p ]] && _filter_includes+=( "$p" )
+  done
+}
+
+filter_add_exclude() {
+  local IFS=',' p
+  for p in $1; do
+    [[ -n $p ]] && _filter_excludes+=( "$p" )
+  done
+}
+
+filter_match() {
+  local name=$1 p matched
+  if (( ${#_filter_includes[@]} > 0 )); then
+    matched=0
+    for p in "${_filter_includes[@]}"; do
+      # shellcheck disable=SC2053
+      if [[ $name == $p ]]; then matched=1; break; fi
+    done
+    (( matched )) || return 1
+  fi
+  if (( ${#_filter_excludes[@]} > 0 )); then
+    for p in "${_filter_excludes[@]}"; do
+      # shellcheck disable=SC2053
+      if [[ $name == $p ]]; then return 1; fi
+    done
+  fi
+  return 0
+}
+
+collect_filtered_subdirs() {
+  subdirs=()
+  local entry name all
+  shopt -s nullglob
+  all=( */ )
+  shopt -u nullglob
+  for entry in "${all[@]}"; do
+    name="${entry%/}"
+    filter_match "$name" && subdirs+=( "$name" )
+  done
+}
+
+# Shared help text for --include/--exclude options, indented to match
+# the surrounding Options block.
+filter_options_help() {
+  cat <<'EOF'
+  -i, --include PATTERN
+                Only operate on subdirs whose name matches PATTERN.
+                Repeatable; PATTERN may be a comma-separated list.
+                Globs are supported (e.g. 'web-*,api').
+  -x, --exclude PATTERN
+                Skip subdirs whose name matches PATTERN. Same syntax
+                as --include. Excludes are applied after includes.
+EOF
+}

@@ -42,6 +42,14 @@ release update                    # run on a release/* branch: sync, re-tag HEAD
 
 Release-name format: `yymm-(a|b|c)` (main cycle) or `yymm-(a|b|c)-N0` where `N` is 1–9 (off-cycle). `prepare` is idempotent. Requires `gh`, a git repo, and a clean working tree.
 
+### [sync-subdir-repos](scripts/sync-subdir-repos)
+
+Fetch updates (with tags) in every git repo directly under the current directory, then check out the repo's main branch (`develop`, `main`, or `master` — preferring `origin/HEAD`) and fast-forward it. Dirty trees are skipped at the pull step.
+
+```sh
+sync-subdir-repos
+```
+
 ### [run-in-subdirs](scripts/run-in-subdirs)
 
 Run a shell command in every visible subdirectory of the current directory. Stops on the first failure unless `-c` / `--continue` is passed. The command is a single string evaluated by the shell, so pipes and `&&` work:
