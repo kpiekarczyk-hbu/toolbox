@@ -5,7 +5,7 @@ Personal `~/toolbox`: small shell scripts wrapped behind a single `toolbox` comm
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kpiekarczyk-hbu/toolbox/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/k-pz/toolbox/main/install.sh | bash
 ```
 
 [install.sh](install.sh) clones this repo to `~/toolbox` and appends a single source line to your shell rc (`~/.zshrc` for zsh, `~/.bash_profile` on macOS bash, `~/.bashrc` on Linux bash). It's idempotent — re-running updates the checkout with `git pull --ff-only` and leaves the rc alone if the line is already there.
@@ -17,7 +17,7 @@ Open a new shell (`exec "$SHELL" -l`). The `toolbox` command is now on `PATH`; r
 If you'd rather not pipe to bash:
 
 ```sh
-git clone https://github.com/kpiekarczyk-hbu/toolbox.git ~/toolbox
+git clone https://github.com/k-pz/toolbox.git ~/toolbox
 echo '. ~/toolbox/.toolboxrc' >> ~/.zshrc   # or ~/.bashrc / ~/.bash_profile
 ```
 
