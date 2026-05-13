@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Installer for https://github.com/kpiekarczyk-hbu/toolbox
+# Installer for https://github.com/k-pz/toolbox
 #
 # One-liner:
-#   curl -fsSL https://raw.githubusercontent.com/kpiekarczyk-hbu/toolbox/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/k-pz/toolbox/main/install.sh | bash
 #
 # Clones the repo to ~/toolbox and adds a single sourcing line to your shell rc.
 # Idempotent: safe to re-run; updates an existing checkout with `git pull --ff-only`.
@@ -10,13 +10,13 @@
 set -euo pipefail
 umask 022
 
-REPO_HTTPS="https://github.com/kpiekarczyk-hbu/toolbox.git"
+REPO_HTTPS="https://github.com/k-pz/toolbox.git"
 INSTALL_DIR="$HOME/toolbox"
 RC_LINE='. ~/toolbox/.toolboxrc'
 MARKER='# toolbox (managed by install.sh)'
 
 # Match either HTTPS or SSH form of the canonical remote, with or without .git suffix.
-REMOTE_RE='^(https://github\.com/kpiekarczyk-hbu/toolbox(\.git)?|git@github\.com:kpiekarczyk-hbu/toolbox(\.git)?)$'
+REMOTE_RE='^(https://github\.com/k-pz/toolbox(\.git)?|git@github\.com:k-pz/toolbox(\.git)?)$'
 
 if [ -t 1 ]; then
   c_red=$'\033[0;31m'; c_yellow=$'\033[0;33m'; c_green=$'\033[0;32m'
@@ -131,7 +131,7 @@ print_summary() {
   info "Activate in this shell:    exec \"\$SHELL\" -l"
   info "Or open a new terminal."
   info "List installed commands:   toolbox list"
-  info "Switch to SSH for push:    git -C \"$INSTALL_DIR\" remote set-url origin git@github.com:kpiekarczyk-hbu/toolbox.git"
+  info "Switch to SSH for push:    git -C \"$INSTALL_DIR\" remote set-url origin git@github.com:k-pz/toolbox.git"
 }
 
 main() {
